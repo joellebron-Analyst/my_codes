@@ -1,7 +1,17 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[43]:
 
 
-ingresar_fecha = '2026-06-18'
+# ### Is Holiday?
+# 
+is_holiday = 'Yes'
 
+ingresar_fecha = '2026-06-04'
+
+
+# In[44]:
 
 
 import xmlrpc.client
@@ -11,7 +21,7 @@ import pandas as pd
 url      = "https://cabicash.odoo.com"
 db       = "alexcape14-cabicashv14-production-master-4665051"
 username = "joel.lebron@ualett.com"
-api_key  = "cbf7d70140e695bd8a838258027cb8f6bce4a1c5"
+api_key  = "bfe1fa773b75414dfd283c0d99e9987041210b9b"
 
 # ── AUTENTICACIÓN ─────────────────────────
 common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
@@ -21,6 +31,8 @@ print(f"✅ UID: {uid}")
 models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
 
 
+
+# In[45]:
 
 
 # ── EXTRAER EMPLEADOS (para el email) ─────
@@ -90,7 +102,10 @@ vacaciones_df = vacaciones_df.sort_values('Empleado/Correo de trabajo').reset_in
 
 
 # ── EXPORTAR ──────────────────────────────
-vacaciones_df.to_excel(r'exception_raw\Vacaciones (hr.leave).xlsx', index=False)
+#vacaciones_df.to_excel(r'exception_raw\Vacaciones (hr.leave).xlsx', index=False)
+
+
+# In[46]:
 
 
 # ── ELEGIR FECHA ──────────────────────────
@@ -170,7 +185,23 @@ df = df[['Empleado/Correo de trabajo', 'Empleado/Departamento', 'Empleado',
 df = df.sort_values(['Empleado/Departamento', 'Empleado']).reset_index(drop=True)
 
 # ── EXPORTAR ──────────────────────────────
-df.to_excel(r'attendance_raw\Asistencia (hr.attendance).xlsx', index=False)
+#df.to_excel(r'attendance_raw\Asistencia (hr.attendance).xlsx', index=False)
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[47]:
+
 
 #Importamos los datos
 import pandas as pd
@@ -180,9 +211,17 @@ import numpy as np
 import time
 import sys
 
+# # Fijar el working directory donde está el .exe
+# if getattr(sys, 'frozen', False):
+#     # Corriendo como .exe
+#     os.chdir(os.path.dirname(sys.executable))
+# else:
+#     # Corriendo como .py
+#     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # Cargo los datos (exeptions file)
-Exception_file = pd.read_excel(r'exception_raw\Vacaciones (hr.leave).xlsx')
+Exception_file = vacaciones_df
+#Exception_file = pd.read_excel(r'exception_raw\Vacaciones (hr.leave).xlsx')
 
 # Esta porción de código arrojará el año actual.
 current_year = str(datetime.now().year)
@@ -238,23 +277,27 @@ Exception_file['Issue Type'] = Exception_file['Issue Type'].replace({
 
 Exception_file.loc[Exception_file['Issue Type'] == 'Vacation', 'Vacation Year Period'] = current_year
 
-Exception_file.to_excel(r'exception_clean\Excepciones.xlsx', index = False)
+#Exception_file.to_excel(r'exception_clean\Excepciones.xlsx', index = False)
+
+
+
+
+# In[48]:
 
 
 # ## ATTENDANCE CODE
 
-# ### Is Holiday?
-# 
-is_holiday = 'No'
+
 
 
 #
 
 
 # Source Data
-source = pd.read_excel(r'attendance_raw\Asistencia (hr.attendance).xlsx')
-# Exceptiones
-Excepciones = pd.read_excel(r'exception_clean\Excepciones.xlsx')
+source = df
+#source = pd.read_excel(r'attendance_raw\Asistencia (hr.attendance).xlsx')
+Excepciones = Exception_file
+#Excepciones = pd.read_excel(r'exception_clean\Excepciones.xlsx')
 
 dia_en_cuestion = pd.to_datetime(source.loc[0, 'Entrada'])
 dia_en_cuestion = dia_en_cuestion.day_name(locale='es')
@@ -300,6 +343,10 @@ merged_data = merged_data[['Work email','Full Name', 'LOB', 'Schedule In',
 
 
 
+# ## Tratamiento con los duplicados
+
+# In[49]:
+
 
 # Separar duplicados del resto
 duplicados = merged_data[merged_data['Full Name'].duplicated(keep=False)]
@@ -328,9 +375,14 @@ duplicados_consolidados.columns = ['Full Name', 'Work email', 'LOB',
 merged_data = pd.concat([no_duplicados, duplicados_consolidados], ignore_index=True)
 
 
+# ### Tratamiento Shift Start
+
+# In[50]:
+
 
 if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
 
+    #############################################################################
 
     shift_start = merged_data
     shift_start = shift_start[['Work email', 'Full Name', 'LOB', 'Schedule In', 
@@ -358,6 +410,7 @@ if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
     shift_start['Away'] = pd.to_datetime(shift_start['Away'], format='mixed')
     shift_start['Away'] = pd.to_timedelta(shift_start['Away'].dt.strftime('%H:%M:%S'))
 
+    # ## Creación de nuevas columnas (Feature Engineering)
 
 
     if dia_en_cuestion in ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']:
@@ -365,6 +418,9 @@ if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
         shift_start['Schedule Hours'] = pd.to_datetime(shift_start['Schedule Hours'])
         shift_start['Schedule Hours'] = shift_start['Schedule Hours'] - shift_start['Schedule Hours'].dt.normalize()
 
+
+
+    # Lunch Column
 
     shift_start['Lunch'] = pd.to_timedelta(shift_start['Lunch'] * 3600, unit='s')
 
@@ -403,6 +459,7 @@ if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
     shift_start['Exception'] = shift_start.apply(buscar_excepcion, axis=1)
     # Columna Status
 
+    ##############################################################################
 
     ## Importamos los archivos necesarios
 
@@ -456,7 +513,10 @@ if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
             shift_start['Work email'].isin(dias_semana['email']), 'Work email'
         ].map(schedule_out_map)
 
-    
+        ##########################################
+
+
+
     # Definir condiciones
     condiciones = [
         # Condición 1 — Tarde + excepción Called Out o Late In
@@ -507,6 +567,10 @@ if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
 
         return f"{hours_12}:{minutes:02d}:{seconds:02d} {period}"
 
+
+    #Puede darse el caso de que Pandas ya lea 'Schedule In', 'Schedule Out', 'Clock In', 'Clock Out' como date_time
+    # Por eso hacemos este pequeño for loop para cambiar esas columnas a string antes de parcear
+
     columnas = ['Schedule In', 'Schedule Out', 'Clock In']
 
     for col in columnas:
@@ -533,7 +597,10 @@ if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
 
                         ]
 
-    no_show['Status'] = 'No Show'
+    if is_holiday == 'Yes':
+        no_show['Status'] = 'Holiday at Home'
+    else:
+        no_show['Status'] = 'No Show'    
     no_show['Clock In'] = ''
     no_show['Away'] = ''
     no_show['Lunch'] = ''
@@ -560,8 +627,14 @@ if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
     shift_start = pd.concat([shift_start, no_show], ignore_index=True)
 
 
-    shift_start.to_excel(r'final_results\Shift_Start.xlsx', index=False)
+    shift_start.to_excel(r'Attendance\final_results\Shift_Start.xlsx', index=False)
     sys.exit()     
+
+
+# In[51]:
+
+
+## Importamos los archivos necesarios
 
 fecha_explicita = pd.read_excel(r'Schedule_Exception(fecha_explicita).xlsx')
 rango_fecha = pd.read_excel(r'Schedule_Exception(Rango_fecha).xlsx')
@@ -570,6 +643,10 @@ dias_semana = pd.read_excel(r'Schedule_Exceptions(dias_en_la_semana).xlsx')
 ## Filtramos a el documento de fecha_explicita a solo los registros que utilizaremos en el dia en cuestión 
 
 fecha_explicita = fecha_explicita.loc[fecha_explicita['Date'] == fecha_en_cuestion]
+
+
+## Filtramos a el documento de dias_semana a solo los registros que utilizaremos en el dia en cuestión 
+
 
 dias_semana = dias_semana.loc[dias_semana['Day'] == dia_en_cuestion]
 
@@ -608,6 +685,10 @@ if merged_data['Work email'].isin(dias_semana['email']).any():
     ] = merged_data.loc[
         merged_data['Work email'].isin(dias_semana['email']), 'Work email'
     ].map(schedule_out_map)
+
+
+# In[52]:
+
 
 # ## Dandole formato a las columnas (Datatypes)
 
@@ -739,6 +820,11 @@ merged_data['Clock In'] = np.where(
 )
 
 
+
+
+# In[53]:
+
+
 # Worked Hours
 merged_data['Worked Hours'] = merged_data['Clock Out'] - merged_data['Clock In'] - merged_data['Lunch']
 
@@ -772,8 +858,7 @@ def timedelta_to_ampm(td):
     if hours_12 == 0:
         hours_12 = 12
 
-    return f"{hours_12}:{minutes:02d}"
-    #:{seconds:02d}"
+    return f"{hours_12}:{minutes:02d}:{seconds:02d}"
 
 merged_data['Worked Hours'] = merged_data['Worked Hours'].apply(timedelta_to_ampm)
 merged_data['Schedule Hours'] = merged_data['Schedule Hours'] - merged_data['Schedule Hours'].dt.normalize()
@@ -784,6 +869,9 @@ merged_data['Away'] = merged_data['Away'].dt.components.apply(
 
 merged_data['Lunch'] = merged_data['Lunch'].dt.components.apply(
     lambda x: f"{int(x['hours']):02d}:{int(x['minutes']):02d}:{int(x['seconds']):02d}", axis=1)
+
+
+# In[54]:
 
 
 ausentes = Excepciones[
@@ -821,12 +909,7 @@ merged_data_ausentes = merged_data_ausentes[['email', 'Date', 'Full Name', 'LOB'
 merged_data_ausentes.rename(columns=({'email':'Work email', 'Issue Type': 'Exception'}), inplace=True)
 
 
-merged_data = merged_data[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
-       'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
-       'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
-
-
-Attendance_report  = pd.concat([merged_data ,merged_data_ausentes], ignore_index=True)
+# In[55]:
 
 
 merged_data = merged_data[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
@@ -836,12 +919,30 @@ merged_data = merged_data[['Work email', 'Date', 'Full Name', 'LOB', 'Status', '
 
 Attendance_report  = pd.concat([merged_data ,merged_data_ausentes], ignore_index=True)
 
+
+# In[56]:
+
+
 merged_data = merged_data[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
        'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
        'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
 
 
 Attendance_report  = pd.concat([merged_data ,merged_data_ausentes], ignore_index=True)
+
+
+# In[57]:
+
+
+merged_data = merged_data[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
+       'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
+       'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+
+Attendance_report  = pd.concat([merged_data ,merged_data_ausentes], ignore_index=True)
+
+
+# In[58]:
 
 
 def timedelta_to_ampm(td):
@@ -861,6 +962,8 @@ def timedelta_to_ampm(td):
     return f"{hours_12}:{minutes:02d}:{seconds:02d} {period}"
 
 
+#Puede darse el caso de que Pandas ya lea 'Schedule In', 'Schedule Out', 'Clock In', 'Clock Out' como date_time
+# Por eso hacemos este pequeño for loop para cambiar esas columnas a string antes de parcear
 
 columnas = ['Schedule In', 'Schedule Out', 'Clock In', 'Clock Out']
 
@@ -875,9 +978,13 @@ for col in columnas:
 # Attendance_report['Clock Out'] = pd.to_timedelta(Attendance_report['Clock Out']).apply(timedelta_to_ampm)
 
 
+# In[59]:
+
 
 Attendance_report['Date'] = pd.to_datetime(Attendance_report['Date']).dt.strftime('%m/%d/%Y')
 
+
+# In[60]:
 
 
 Attendance_report = Attendance_report[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
@@ -886,9 +993,17 @@ Attendance_report = Attendance_report[['Work email', 'Date', 'Full Name', 'LOB',
 
 
 
+
+
+# In[61]:
+
+
 Attendance_report = Attendance_report[['Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
        'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
        'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+
+# In[62]:
 
 
 no_show = roster[
@@ -901,7 +1016,11 @@ no_show = roster[
 
                       ]
 
-no_show['Status'] = 'No Show'
+if is_holiday == 'Yes':
+        no_show['Status'] = 'Holiday at Home'
+else:    
+    no_show['Status'] = 'No Show'
+
 no_show['Clock In'] = ''
 no_show['Away'] = ''
 no_show['Lunch'] = ''
@@ -928,14 +1047,17 @@ for col in columnas:
 Attendance_report = pd.concat([Attendance_report, no_show], ignore_index=True)
 
 
+# In[63]:
+
+
 if dia_en_cuestion == 'Sábado' and Attendance_report['Full Name'].duplicated().any() == False:
     Attendance_report = Attendance_report[Attendance_report['Status'].isin(['Late', 'On Time'])]
     Attendance_report = Attendance_report.sort_values(by='LOB')
-    Attendance_report.to_excel(r'final_results\Attendance_Report.xlsx', index= False)
+    Attendance_report.to_excel(r'Attendance\final_results\Attendance_Report.xlsx', index= False)
 
 
 else:
     Attendance_report = Attendance_report.sort_values(by='LOB')
-    Attendance_report.to_excel(r'final_results\Attendance_Report.xlsx', index= False)
+    Attendance_report.to_excel(r'final_results\Attendance\Attendance_Report.xlsx', index= False)
 
 
