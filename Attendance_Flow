@@ -1,0 +1,941 @@
+
+
+ingresar_fecha = '2026-06-18'
+
+
+
+import xmlrpc.client
+import pandas as pd
+
+# ── CONFIGURACIÓN ─────────────────────────
+url      = "https://cabicash.odoo.com"
+db       = "alexcape14-cabicashv14-production-master-4665051"
+username = "joel.lebron@ualett.com"
+api_key  = "cbf7d70140e695bd8a838258027cb8f6bce4a1c5"
+
+# ── AUTENTICACIÓN ─────────────────────────
+common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
+uid = common.authenticate(db, username, api_key, {})
+print(f"✅ UID: {uid}")
+
+models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
+
+
+
+
+# ── EXTRAER EMPLEADOS (para el email) ─────
+print("Extrayendo empleados...")
+empleados_raw = models.execute_kw(db, uid, api_key,
+    "hr.employee", "search_read",
+    [[]],
+    {"fields": ["id", "name", "work_email"], "limit": 1000}
+)
+
+empleados_df = pd.DataFrame(empleados_raw)
+empleados_df = empleados_df[['id', 'work_email']]
+
+# ── EXTRAER VACACIONES ────────────────────
+vacaciones_raw = models.execute_kw(db, uid, api_key,
+    "hr.leave", "search_read",
+    [[]],
+    {"fields": [
+        "employee_id",
+        "holiday_status_id",
+        "state",
+        "date_from",
+        "date_to",
+    ], "limit": 5000}
+)
+
+# ── CONVERTIR A DATAFRAME ─────────────────
+vacaciones_df = pd.DataFrame(vacaciones_raw)
+
+vacaciones_df['employee_name'] = vacaciones_df['employee_id'].apply(lambda x: x[1] if x else '')
+vacaciones_df['employee_id']   = vacaciones_df['employee_id'].apply(lambda x: x[0] if x else None)
+vacaciones_df['Tipo de permiso'] = vacaciones_df['holiday_status_id'].apply(lambda x: x[1] if x else '')
+
+# ── MAPEAR ESTADOS ────────────────────────
+estados = {
+    'validate' : 'Aprobado',
+    'draft'    : 'Por aprobar',
+    'confirm'  : 'Por aprobar',
+    'refuse'   : 'Rechazado',
+    'validate1': 'Por aprobar',
+}
+vacaciones_df['Estado'] = vacaciones_df['state'].map(estados)
+
+# ── CORREGIR ZONA HORARIA ─────────────────
+vacaciones_df['Fecha de inicio']       = pd.to_datetime(vacaciones_df['date_from']).dt.tz_localize('UTC').dt.tz_convert('America/Santo_Domingo').dt.tz_localize(None)
+vacaciones_df['Fecha de finalización'] = pd.to_datetime(vacaciones_df['date_to']).dt.tz_localize('UTC').dt.tz_convert('America/Santo_Domingo').dt.tz_localize(None)
+
+# ── CRUZAR CON EMPLEADOS PARA OBTENER EMAIL ──
+vacaciones_df = vacaciones_df.merge(empleados_df, left_on='employee_id', right_on='id', how='left')
+
+# ── RENOMBRAR EMAIL ───────────────────────
+vacaciones_df = vacaciones_df.rename(columns={
+    'work_email': 'Empleado/Correo de trabajo'
+})
+
+# ── SELECCIONAR COLUMNAS ──────────────────
+vacaciones_df = vacaciones_df[[
+    'Empleado/Correo de trabajo',
+    'Tipo de permiso',
+    'Estado',
+    'Fecha de finalización',
+    'Fecha de inicio'
+]]
+
+# ── ORDENAR ───────────────────────────────
+vacaciones_df = vacaciones_df.sort_values('Empleado/Correo de trabajo').reset_index(drop=True)
+
+
+# ── EXPORTAR ──────────────────────────────
+vacaciones_df.to_excel(r'exception_raw\Vacaciones (hr.leave).xlsx', index=False)
+
+
+# ── ELEGIR FECHA ──────────────────────────
+fecha = ingresar_fecha
+fecha_inicio = f"{fecha} 00:00:00"
+fecha_fin    = f"{fecha} 23:59:59"
+
+# ── EXTRAER EMPLEADOS ─────────────────────
+print("Extrayendo empleados...")
+empleados_raw = models.execute_kw(db, uid, api_key,
+    "hr.employee", "search_read",
+    [[]],
+    {"fields": ["id", "work_email", "department_id"], "limit": 1000}
+)
+
+empleados_df = pd.DataFrame(empleados_raw)
+empleados_df['Department'] = empleados_df['department_id'].apply(lambda x: x[1] if x else '')
+empleados_df = empleados_df[['id', 'work_email', 'Department']]
+print(f"✅ {len(empleados_df)} empleados")
+
+# ── EXTRAER ASISTENCIA ────────────────────
+print(f"Extrayendo asistencia para {fecha}...")
+attendance_raw = models.execute_kw(db, uid, api_key,
+    "hr.attendance", "search_read",
+    [[
+        ["check_in", ">=", fecha_inicio],
+        ["check_in", "<=", fecha_fin]
+    ]],
+    {"fields": [
+        "employee_id",
+        "check_in",
+        "check_out",
+        "worked_hours",
+        "away_hours",
+        "lunch_hours",
+        "meeting_hours",
+        "overtime_hours",
+    ], "limit": 500}
+)
+print(f"✅ {len(attendance_raw)} registros encontrados")
+
+# ── CONVERTIR A DATAFRAME ─────────────────
+df = pd.DataFrame(attendance_raw)
+
+df['Full Name']   = df['employee_id'].apply(lambda x: x[1])
+df['employee_id'] = df['employee_id'].apply(lambda x: x[0])
+
+# ── CORREGIR ZONA HORARIA UTC → UTC-4 ─────
+df['Clock In']  = pd.to_datetime(df['check_in']).dt.tz_localize('UTC').dt.tz_convert('America/Santo_Domingo').dt.tz_localize(None)
+###44$####
+df['check_out'] = df['check_out'].apply(lambda x: None if x is False else x)
+df['Clock Out'] = pd.to_datetime(df['check_out']).dt.tz_localize('UTC').dt.tz_convert('America/Santo_Domingo').dt.tz_localize(None)
+
+# ── MERGE CON EMPLEADOS ───────────────────
+df = df.merge(empleados_df, left_on='employee_id', right_on='id', how='left')
+
+# ── RENOMBRAR COLUMNAS ────────────────────
+df = df.rename(columns={
+    'work_email'    : 'Empleado/Correo de trabajo',
+    'worked_hours'  : 'Horas trabajadas',
+    'away_hours'    : 'Away Hours',
+    'lunch_hours'   : 'Lunch Hours',
+    'meeting_hours' : 'Meeting Hours',
+    'overtime_hours': 'Horas extra',
+    'Full Name'     : 'Empleado',
+    'Department'    : 'Empleado/Departamento',
+    'Clock In'      : 'Entrada',
+    'Clock Out'     : 'Salida',
+})
+
+# ── SELECCIONAR COLUMNAS ──────────────────
+df = df[['Empleado/Correo de trabajo', 'Empleado/Departamento', 'Empleado',
+         'Entrada', 'Away Hours', 'Lunch Hours', 'Meeting Hours',
+         'Horas extra', 'Salida', 'Horas trabajadas']]
+
+# ── ORDENAR ───────────────────────────────
+df = df.sort_values(['Empleado/Departamento', 'Empleado']).reset_index(drop=True)
+
+# ── EXPORTAR ──────────────────────────────
+df.to_excel(r'attendance_raw\Asistencia (hr.attendance).xlsx', index=False)
+
+#Importamos los datos
+import pandas as pd
+from datetime import datetime
+import os
+import numpy as np
+import time
+import sys
+
+
+# Cargo los datos (exeptions file)
+Exception_file = pd.read_excel(r'exception_raw\Vacaciones (hr.leave).xlsx')
+
+# Esta porción de código arrojará el año actual.
+current_year = str(datetime.now().year)
+
+#Añadimos el Current working directory a una variable
+
+timestamp = datetime.now()
+#timestamp = timestamp.strftime("%m/%d/%Y %H:%M:%S")
+
+Exception_file['Timestamp'] = timestamp
+
+#REformatear los datos de las columnas fecha inicio, fecha finalización
+Exception_file['Fecha de inicio'] = pd.to_datetime(Exception_file['Fecha de inicio'])
+Exception_file['Fecha de finalización'] = pd.to_datetime(Exception_file['Fecha de finalización'])
+
+#Filtramos el Dataset y nos quedamos con los que los estados son "Aprobados"
+Exception_file = Exception_file[(Exception_file['Estado']=="Aprobado")]
+
+#Eliminar columna Estado
+Exception_file.drop('Estado', axis = 1, inplace= True)
+
+#Añadimos una columna y lo dejamos como vacia.
+Exception_file['Vacation Year Period'] = ''
+
+#Reordenamos las columnas.
+Exception_file = Exception_file[['Timestamp', 
+                                 'Empleado/Correo de trabajo', 
+                                 'Tipo de permiso',
+                                 'Vacation Year Period',
+                                 'Fecha de inicio', 
+                                 'Fecha de finalización' ]]
+
+
+
+
+#Cambiar nombre de las columnas
+Exception_file.rename(columns={'Empleado/Correo de trabajo':'email', 
+                               'Tipo de permiso':'Issue Type', 
+                               'Fecha de inicio':'Attendance Start Date', 
+                               'Fecha de finalización':'Attendance End Date'
+                               }, inplace=True)
+
+#Cambiandole los nombres a las excepciones
+Exception_file['Issue Type'] = Exception_file['Issue Type'].replace({
+                                                  'Permiso de ausencia': 'Leave of Absence',
+                                                  'Licencia médica': 'Medical License',
+                                                  'Cita médica': 'Medical Appointment',
+                                                  'Matrimonio': 'Marriage',
+                                                  'Salida temprana': 'Ealy Out', 'Vacations': 'Vacation',
+                                                  'Tardanza':'Late In',
+                                                  'Duelo': 'Grief',
+                                                  'Licencia por maternidad/paternidad':'Maternity/paternity License'})
+
+Exception_file.loc[Exception_file['Issue Type'] == 'Vacation', 'Vacation Year Period'] = current_year
+
+Exception_file.to_excel(r'exception_clean\Excepciones.xlsx', index = False)
+
+
+# ## ATTENDANCE CODE
+
+# ### Is Holiday?
+# 
+is_holiday = 'No'
+
+
+#
+
+
+# Source Data
+source = pd.read_excel(r'attendance_raw\Asistencia (hr.attendance).xlsx')
+# Exceptiones
+Excepciones = pd.read_excel(r'exception_clean\Excepciones.xlsx')
+
+dia_en_cuestion = pd.to_datetime(source.loc[0, 'Entrada'])
+dia_en_cuestion = dia_en_cuestion.day_name(locale='es')
+
+#Fecha en cuetion
+fecha_en_cuestion = pd.to_datetime(source.loc[0, 'Entrada'].normalize())
+
+#roster
+if dia_en_cuestion == 'Sábado':
+    roster = pd.read_excel(r'Schedule_change\Roster_Sabado.xlsx')
+else:
+    roster = pd.read_excel(r'Schedule_change\Roster.xlsx')
+
+#Eliminamos las siguientes columnas
+source.drop(['Empleado','Empleado/Departamento', 'Horas trabajadas'], axis=1, inplace= True)
+
+
+source = source.rename(columns={'Empleado/Correo de trabajo':'Work email',
+                                'Entrada':'Clock In',
+                                'Horas extra': 'Extra hours',
+                                'Salida':'Clock Out',
+                                'Away Hours': 'Away',
+                                'Lunch Hours': 'Lunch',
+                                'Meeting Hours':'Meeting',
+
+
+
+                                })
+
+roster = roster.rename(columns={'M/F In':'Schedule In', 'M/F Out':'Schedule Out', 'Status':'Active'})
+
+
+merged_data = pd.merge(source, roster, left_on= 'Work email', right_on = 'Email', how='left')
+
+
+
+merged_data = merged_data[['Work email','Full Name', 'LOB', 'Schedule In', 
+                           'Schedule Out','Clock In', 'Away', 'Lunch',
+                           'Clock Out',
+                           'Active'
+                                        ]]
+
+
+
+
+
+# Separar duplicados del resto
+duplicados = merged_data[merged_data['Full Name'].duplicated(keep=False)]
+no_duplicados = merged_data[~merged_data['Full Name'].duplicated(keep=False)]
+
+# Consolidar duplicados
+duplicados_consolidados = duplicados.groupby('Full Name').agg(
+    Work_email    = ('Work email', 'first'),
+    LOB           = ('LOB', 'first'),
+    Schedule_In   = ('Schedule In', 'first'),
+    Schedule_Out  = ('Schedule Out', 'first'),
+    Clock_In      = ('Clock In', 'min'),    # más temprano
+    Away          = ('Away', 'sum'),         # suma
+    Lunch         = ('Lunch', 'sum'),        # suma
+    Clock_Out     = ('Clock Out', 'max'),   # más tardío
+    Active        = ('Active', 'first'),
+).reset_index()
+
+# Renombrar columnas al formato original
+duplicados_consolidados.columns = ['Full Name', 'Work email', 'LOB', 
+                                    'Schedule In', 'Schedule Out', 
+                                    'Clock In', 'Away', 'Lunch', 
+                                    'Clock Out', 'Active']
+
+# Unir de nuevo con los no duplicados
+merged_data = pd.concat([no_duplicados, duplicados_consolidados], ignore_index=True)
+
+
+
+if merged_data.loc[:, 'Clock Out'].isna().sum() >= 50:
+
+
+    shift_start = merged_data
+    shift_start = shift_start[['Work email', 'Full Name', 'LOB', 'Schedule In', 
+                            'Schedule Out','Clock In', 'Away', 'Lunch'
+                                            ]]
+    cols = ['Schedule Out', 'Schedule In']
+
+    for x in cols:
+        shift_start[x] = shift_start[x].apply(lambda v: str(v) if not isinstance(v, str) else v)
+        shift_start[x] = pd.to_timedelta(shift_start[x])
+
+    shift_start['Clock Out'] = ' '
+    shift_start['Clock In'] = shift_start['Clock In'] - shift_start['Clock In'].dt.normalize()
+
+
+
+    # Formating Away colums
+    shift_start['Away'] = pd.to_timedelta(shift_start['Away'] * 3600, unit='s')
+
+    # Formatear como string 00:14:00
+    shift_start['Away'] = shift_start['Away'].apply(
+        lambda x: f"{int(x.total_seconds()//3600):02d}:{int((x.total_seconds()%3600)//60):02d}:{int(x.total_seconds()%60):02d}"
+    )
+
+    shift_start['Away'] = pd.to_datetime(shift_start['Away'], format='mixed')
+    shift_start['Away'] = pd.to_timedelta(shift_start['Away'].dt.strftime('%H:%M:%S'))
+
+
+
+    if dia_en_cuestion in ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']:
+        shift_start.loc[:, 'Schedule Hours'] = '8:00:00'
+        shift_start['Schedule Hours'] = pd.to_datetime(shift_start['Schedule Hours'])
+        shift_start['Schedule Hours'] = shift_start['Schedule Hours'] - shift_start['Schedule Hours'].dt.normalize()
+
+
+    shift_start['Lunch'] = pd.to_timedelta(shift_start['Lunch'] * 3600, unit='s')
+
+    # Formatear como string 00:14:00
+    shift_start['Lunch'] = shift_start['Lunch'].apply(
+        lambda x: f"{int(x.total_seconds()//3600):02d}:{int((x.total_seconds()%3600)//60):02d}:{int(x.total_seconds()%60):02d}"
+    )
+
+    shift_start['Lunch'] = pd.to_datetime(shift_start['Lunch'], format='mixed')
+    shift_start['Lunch'] = pd.to_timedelta(shift_start['Lunch'].dt.strftime('%H:%M:%S'))
+
+
+
+
+    shift_start['Away'] = shift_start['Away'].dt.components.apply(
+        lambda x: f"{int(x['hours']):02d}:{int(x['minutes']):02d}:{int(x['seconds']):02d}", axis=1)
+
+    shift_start['Lunch'] = shift_start['Lunch'].dt.components.apply(
+        lambda x: f"{int(x['hours']):02d}:{int(x['minutes']):02d}:{int(x['seconds']):02d}", axis=1)
+
+    shift_start['Schedule Hours'] = shift_start['Schedule Hours'].dt.components.apply(
+        lambda x: f"{int(x['hours']):02d}:{int(x['minutes']):02d}:{int(x['seconds']):02d}", axis=1)
+
+    shift_start['Date'] = fecha_en_cuestion
+
+    #Columna Exception
+
+    def buscar_excepcion(row):
+        match = Excepciones[
+            (Excepciones['email'].str.strip().str.lower() == row['Work email'].strip().lower()) &
+            (row['Date'] >= Excepciones['Attendance Start Date']) &
+            (row['Date'] <= Excepciones['Attendance End Date'])
+        ]
+        return match['Issue Type'].values[0] if len(match) > 0 else ''
+
+    shift_start['Exception'] = shift_start.apply(buscar_excepcion, axis=1)
+    # Columna Status
+
+
+    ## Importamos los archivos necesarios
+
+    fecha_explicita = pd.read_excel(r'Schedule_Exception(fecha_explicita).xlsx')
+    rango_fecha = pd.read_excel(r'Schedule_Exception(Rango_fecha).xlsx')
+    dias_semana = pd.read_excel(r'Schedule_Exceptions(dias_en_la_semana).xlsx')
+
+    ## Filtramos a el documento de fecha_explicita a solo los registros que utilizaremos en el dia en cuestión 
+
+    fecha_explicita = fecha_explicita.loc[fecha_explicita['Date'] == fecha_en_cuestion]
+
+
+    ## Filtramos a el documento de dias_semana a solo los registros que utilizaremos en el dia en cuestión 
+
+
+    dias_semana = dias_semana.loc[dias_semana['Day'] == dia_en_cuestion]
+
+
+
+    if shift_start['Work email'].isin(fecha_explicita['email']).any():
+
+        schedule_map = fecha_explicita.set_index('email')['Schedule In'].astype(str).to_dict()
+        schedule_out_map = fecha_explicita.set_index('email')['Schedule Out'].astype(str).to_dict()
+
+        shift_start.loc[
+            shift_start['Work email'].isin(fecha_explicita['email']), 'Schedule In'
+        ] = shift_start.loc[
+            shift_start['Work email'].isin(fecha_explicita['email']), 'Work email'
+        ].map(schedule_map)
+
+        shift_start.loc[
+            shift_start['Work email'].isin(fecha_explicita['email']), 'Schedule Out'
+        ] = shift_start.loc[
+            shift_start['Work email'].isin(fecha_explicita['email']), 'Work email'
+        ].map(schedule_out_map)
+
+    if shift_start['Work email'].isin(dias_semana['email']).any():
+
+        schedule_map = dias_semana.set_index('email')['Schedule In'].astype(str).to_dict()
+        schedule_out_map = dias_semana.set_index('email')['Schedule Out'].astype(str).to_dict()
+
+        shift_start.loc[
+            shift_start['Work email'].isin(dias_semana['email']), 'Schedule In'
+        ] = shift_start.loc[
+            shift_start['Work email'].isin(dias_semana['email']), 'Work email'
+        ].map(schedule_map)
+
+        shift_start.loc[
+            shift_start['Work email'].isin(dias_semana['email']), 'Schedule Out'
+        ] = shift_start.loc[
+            shift_start['Work email'].isin(dias_semana['email']), 'Work email'
+        ].map(schedule_out_map)
+
+    
+    # Definir condiciones
+    condiciones = [
+        # Condición 1 — Tarde + excepción Called Out o Late In
+        (shift_start['Clock In'] > shift_start['Schedule In'] + pd.Timedelta(minutes=6)) &
+        (shift_start['Exception'].isin(['Called Out', 'Late In'])),
+
+        # Condición 2 — A tiempo + tiene alguna excepción
+        (shift_start['Clock In'] <= shift_start['Schedule In'] + pd.Timedelta(minutes=5)) &
+        (shift_start['Exception'] != ''),
+
+        # Condición 3 — Tarde + sin excepción
+        (shift_start['Clock In'] > shift_start['Schedule In'] + pd.Timedelta(minutes=6)) &
+        (shift_start['Exception'] == ''),
+    ]
+
+    # Resultados para cada condición
+    resultados = [
+        shift_start['Exception'],  # Condición 1
+        shift_start['Exception'],  # Condición 2
+        'Late',                      # Condición 3
+    ]
+
+    # Aplicar
+    shift_start['Status'] = np.select(condiciones, resultados, default='On Time')
+
+    shift_start = shift_start[['Date', 'Full Name', 'LOB', 'Status', 'Schedule In', 'Schedule Out', 
+                            'Schedule Hours', 'Clock In', 'Away', 'Lunch']]
+
+    shift_start['Clock In'] = np.where(
+        shift_start['Clock In'] < shift_start['Schedule In'],
+        shift_start['Schedule In'],
+        shift_start['Clock In']
+    )
+
+    def timedelta_to_ampm(td):
+
+        if pd.isna(td):  # si es NaN, retorna vacío
+            return ''
+        total_seconds = int(td.total_seconds())
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+
+        period = "AM" if hours < 12 else "PM"
+        hours_12 = hours % 12
+        if hours_12 == 0:
+            hours_12 = 12
+
+        return f"{hours_12}:{minutes:02d}:{seconds:02d} {period}"
+
+    columnas = ['Schedule In', 'Schedule Out', 'Clock In']
+
+    for col in columnas:
+        shift_start[col] = pd.to_timedelta(
+            shift_start[col].astype(str)
+        ).apply(timedelta_to_ampm)
+
+    shift_start['Date'] = shift_start['Date'].dt.strftime('%m/%d/%Y')
+
+    shift_start = shift_start.sort_values(by='LOB')
+
+
+    shift_start = shift_start.sort_values(by='LOB')
+
+
+
+    no_show = roster[
+
+        (~roster['Email'].str.strip().str.lower().isin(source['Work email'])) &
+                        (~roster['Email'].isin(Excepciones.loc[(Excepciones['Attendance Start Date'].dt.normalize()<= fecha_en_cuestion) & 
+                        (Excepciones['Attendance End Date'].dt.normalize() >=fecha_en_cuestion),                         
+                            'email'].str.strip().str.lower()))
+
+
+                        ]
+
+    no_show['Status'] = 'No Show'
+    no_show['Clock In'] = ''
+    no_show['Away'] = ''
+    no_show['Lunch'] = ''
+    no_show['Clock Out'] = ''
+    no_show['Date'] = fecha_en_cuestion
+    no_show['Date'] = no_show['Date'].dt.strftime('%m/%d/%Y')
+    no_show['Worked Hours'] =  ''
+    no_show['Holiday'] = ''
+    no_show['Schedule Hours'] = ''
+    no_show['Active'] = 'Active'
+    no_show['Exception'] = ''
+
+    no_show = no_show[['Date', 'Full Name', 'LOB', 'Status', 'Schedule In', 'Schedule Out',
+        'Schedule Hours', 'Clock In', 'Away', 'Lunch', 'Clock Out',
+        'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+    columnas = ['Schedule In', 'Schedule Out']
+
+    for col in columnas:
+        no_show[col] = pd.to_timedelta(
+            no_show[col].astype(str)
+        ).apply(timedelta_to_ampm)
+
+    shift_start = pd.concat([shift_start, no_show], ignore_index=True)
+
+
+    shift_start.to_excel(r'final_results\Shift_Start.xlsx', index=False)
+    sys.exit()     
+
+fecha_explicita = pd.read_excel(r'Schedule_Exception(fecha_explicita).xlsx')
+rango_fecha = pd.read_excel(r'Schedule_Exception(Rango_fecha).xlsx')
+dias_semana = pd.read_excel(r'Schedule_Exceptions(dias_en_la_semana).xlsx')
+
+## Filtramos a el documento de fecha_explicita a solo los registros que utilizaremos en el dia en cuestión 
+
+fecha_explicita = fecha_explicita.loc[fecha_explicita['Date'] == fecha_en_cuestion]
+
+dias_semana = dias_semana.loc[dias_semana['Day'] == dia_en_cuestion]
+
+
+
+if merged_data['Work email'].isin(fecha_explicita['email']).any():
+
+    schedule_map = fecha_explicita.set_index('email')['Schedule In'].astype(str).to_dict()
+    schedule_out_map = fecha_explicita.set_index('email')['Schedule Out'].astype(str).to_dict()
+
+    merged_data.loc[
+        merged_data['Work email'].isin(fecha_explicita['email']), 'Schedule In'
+    ] = merged_data.loc[
+        merged_data['Work email'].isin(fecha_explicita['email']), 'Work email'
+    ].map(schedule_map)
+
+    merged_data.loc[
+        merged_data['Work email'].isin(fecha_explicita['email']), 'Schedule Out'
+    ] = merged_data.loc[
+        merged_data['Work email'].isin(fecha_explicita['email']), 'Work email'
+    ].map(schedule_out_map)
+
+if merged_data['Work email'].isin(dias_semana['email']).any():
+
+    schedule_map = dias_semana.set_index('email')['Schedule In'].astype(str).to_dict()
+    schedule_out_map = dias_semana.set_index('email')['Schedule Out'].astype(str).to_dict()
+
+    merged_data.loc[
+        merged_data['Work email'].isin(dias_semana['email']), 'Schedule In'
+    ] = merged_data.loc[
+        merged_data['Work email'].isin(dias_semana['email']), 'Work email'
+    ].map(schedule_map)
+
+    merged_data.loc[
+        merged_data['Work email'].isin(dias_semana['email']), 'Schedule Out'
+    ] = merged_data.loc[
+        merged_data['Work email'].isin(dias_semana['email']), 'Work email'
+    ].map(schedule_out_map)
+
+# ## Dandole formato a las columnas (Datatypes)
+
+merged_data['Schedule In'] = merged_data['Schedule In'].astype('str')
+merged_data['Schedule Out'] = merged_data['Schedule Out'].astype('str')
+
+merged_data['Schedule In'] = pd.to_datetime(merged_data['Schedule In'], format='mixed')
+merged_data['Schedule Out'] = pd.to_datetime(merged_data['Schedule Out'], format='mixed')
+
+# Formating Away colums
+merged_data['Away'] = pd.to_timedelta(merged_data['Away'] * 3600, unit='s')
+
+# Formatear como string 00:14:00
+merged_data['Away'] = merged_data['Away'].apply(
+    lambda x: f"{int(x.total_seconds()//3600):02d}:{int((x.total_seconds()%3600)//60):02d}:{int(x.total_seconds()%60):02d}"
+)
+
+merged_data['Away'] = pd.to_datetime(merged_data['Away'], format='mixed')
+merged_data['Away'] = pd.to_timedelta(merged_data['Away'].dt.strftime('%H:%M:%S'))
+
+# ## Creación de nuevas columnas (Feature Engineering)
+
+
+if dia_en_cuestion in ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']:
+    merged_data.loc[:, 'Schedule Hours'] = '8:00:00'
+    merged_data['Schedule Hours'] = pd.to_datetime(merged_data['Schedule Hours'], format='mixed')
+
+
+
+# Lunch Column
+
+merged_data['Lunch'] = pd.to_timedelta(merged_data['Lunch'] * 3600, unit='s')
+
+# Formatear como string 00:14:00
+merged_data['Lunch'] = merged_data['Lunch'].apply(
+    lambda x: f"{int(x.total_seconds()//3600):02d}:{int((x.total_seconds()%3600)//60):02d}:{int(x.total_seconds()%60):02d}"
+)
+
+merged_data['Lunch'] = pd.to_datetime(merged_data['Lunch'], format='mixed')
+merged_data['Lunch'] = pd.to_timedelta(merged_data['Lunch'].dt.strftime('%H:%M:%S'))
+
+
+# Columna Lunch
+
+#Este Schedule Lunch solo se utilizará para hacer calculos
+
+if dia_en_cuestion == 'Sábado':
+    Schedule_Lunch = '0:00:00'
+else:
+    Schedule_Lunch = '1:00:00'
+Schedule_Lunch = pd.to_timedelta(Schedule_Lunch)
+
+conds = [merged_data['Lunch'] <= Schedule_Lunch,
+            merged_data['Lunch'] > Schedule_Lunch
+
+            ]
+
+Results = [
+        Schedule_Lunch,
+        merged_data['Lunch']
+
+]
+
+merged_data['Lunch'] = np.select(conds, Results, default=Schedule_Lunch)
+
+
+# 1. Primero extrae Date ANTES de convertir a timedelta
+merged_data['Date'] = pd.to_datetime(merged_data['Clock In'].dt.normalize() )
+# 2. Luego convierte a timedelta
+
+merged_data['Clock In']    = pd.to_timedelta(merged_data['Clock In'].dt.strftime('%H:%M:%S'))
+merged_data['Schedule In'] = pd.to_timedelta(merged_data['Schedule In'].dt.strftime('%H:%M:%S'))
+merged_data['Clock Out']   = pd.to_timedelta(merged_data['Clock Out'].dt.strftime('%H:%M:%S'))
+merged_data['Schedule Out'] = pd.to_timedelta(merged_data['Schedule Out'].dt.strftime('%H:%M:%S'))
+
+# 3. Normalizar fechas de Excepciones
+Excepciones['Attendance Start Date'] = pd.to_datetime(Excepciones['Attendance Start Date'].dt.normalize())
+Excepciones['Attendance End Date']   = pd.to_datetime(Excepciones['Attendance End Date'].dt.normalize())
+
+
+#Columna Exception
+
+def buscar_excepcion(row):
+    match = Excepciones[
+        (Excepciones['email'].str.strip().str.lower() == row['Work email'].strip().lower()) &
+        (row['Date'] >= Excepciones['Attendance Start Date']) &
+        (row['Date'] <= Excepciones['Attendance End Date'])
+    ]
+    return match['Issue Type'].values[0] if len(match) > 0 else ''
+
+merged_data['Exception'] = merged_data.apply(buscar_excepcion, axis=1)
+# Columna Status
+
+# Definir condiciones
+condiciones = [
+    # Condición 1 — Tarde + excepción Called Out o Late In
+    (merged_data['Clock In'] > merged_data['Schedule In'] + pd.Timedelta(minutes=6)) &
+    (merged_data['Exception'].isin(['Called Out', 'Late In'])),
+
+    # Condición 2 — A tiempo + tiene alguna excepción
+    (merged_data['Clock In'] <= merged_data['Schedule In'] + pd.Timedelta(minutes=5)) &
+    (merged_data['Exception'] != ''),
+
+    # Condición 3 — Tarde + sin excepción
+    (merged_data['Clock In'] > merged_data['Schedule In'] + pd.Timedelta(minutes=6)) &
+    (merged_data['Exception'] == ''),
+]
+
+# Resultados para cada condición
+resultados = [
+    merged_data['Exception'],  # Condición 1
+    merged_data['Exception'],  # Condición 2
+    'Late',                      # Condición 3
+]
+
+# Aplicar
+merged_data['Status'] = np.select(condiciones, resultados, default='On Time')
+
+
+# Columna Holiday
+merged_data.loc[:, 'Holiday'] = is_holiday
+
+
+
+merged_data['Clock In'] = np.where(
+    merged_data['Clock In'] < merged_data['Schedule In'],
+    merged_data['Schedule In'],
+    merged_data['Clock In']
+)
+
+
+# Worked Hours
+merged_data['Worked Hours'] = merged_data['Clock Out'] - merged_data['Clock In'] - merged_data['Lunch']
+
+
+# merged_data['Lunch'] = pd.to_datetime(merged_data['Lunch'])
+# merged_data['Clock In'] = pd.to_datetime(merged_data['Clock In'])
+# merged_data['Schedule In'] = pd.to_datetime(merged_data['Schedule In'])
+
+merged_data = merged_data[['Work email', 'Date', 'Full Name',
+                           'LOB', 'Status',
+                           'Schedule In', 'Schedule Out',
+                           'Schedule Hours',
+                           'Clock In', 'Away',
+                           'Lunch', 'Clock Out',
+                           'Worked Hours', 'Holiday',
+                           'Active', 'Exception'
+
+                           ]]
+
+
+def timedelta_to_ampm(td):
+    if pd.isna(td):  # si es NaN, retorna vacío
+        return ''
+    total_seconds = int(td.total_seconds())
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+
+    period = "AM" if hours < 12 else "PM"
+    hours_12 = hours % 12
+    if hours_12 == 0:
+        hours_12 = 12
+
+    return f"{hours_12}:{minutes:02d}"
+    #:{seconds:02d}"
+
+merged_data['Worked Hours'] = merged_data['Worked Hours'].apply(timedelta_to_ampm)
+merged_data['Schedule Hours'] = merged_data['Schedule Hours'] - merged_data['Schedule Hours'].dt.normalize()
+merged_data['Schedule Hours'] = merged_data['Schedule Hours'].apply(timedelta_to_ampm)
+
+merged_data['Away'] = merged_data['Away'].dt.components.apply(
+    lambda x: f"{int(x['hours']):02d}:{int(x['minutes']):02d}:{int(x['seconds']):02d}", axis=1)
+
+merged_data['Lunch'] = merged_data['Lunch'].dt.components.apply(
+    lambda x: f"{int(x['hours']):02d}:{int(x['minutes']):02d}:{int(x['seconds']):02d}", axis=1)
+
+
+ausentes = Excepciones[
+    (Excepciones['Attendance Start Date'] <= fecha_en_cuestion) &
+    (Excepciones['Attendance End Date'] >= fecha_en_cuestion) &
+    (~Excepciones['email'].str.strip().str.lower().isin(
+        merged_data['Work email'].str.strip().str.lower()
+    ))
+][['email', 'Issue Type']]
+
+merged_data_ausentes = pd.merge(ausentes, roster, left_on= 'email', right_on='Email', how='inner' )
+
+merged_data_ausentes = merged_data_ausentes[['Issue Type', 'Full Name', 'First Name', 'Last Name', 'email',
+       'LOB', 'Active', 'Supervisor', 'Role', 'Schedule In', 'Schedule Out']]
+
+
+# ## Añadir y Reordenar columnas de manera correcta
+
+merged_data_ausentes['Date'] = fecha_en_cuestion
+merged_data_ausentes['Status'] = merged_data_ausentes['Issue Type']
+merged_data_ausentes['Schedule Hours'] = merged_data['Schedule Hours']
+merged_data_ausentes['Clock In'] = ''
+merged_data_ausentes['Clock Out'] = ''
+merged_data_ausentes['Away'] = ''
+merged_data_ausentes['Lunch'] = ''
+merged_data_ausentes['Holiday'] = is_holiday
+merged_data_ausentes.loc[merged_data_ausentes['Issue Type'] == 'Vacation', 'Worked Hours'] = '8:00:00'
+
+
+merged_data_ausentes = merged_data_ausentes[['email', 'Date', 'Full Name', 'LOB', 'Status', 
+                                             'Schedule In', 'Schedule Out', 'Schedule Hours',
+                                             'Clock In', 'Away', 'Lunch', 'Clock Out', 'Worked Hours', 
+                                             'Holiday', 'Active', 'Issue Type']]
+
+merged_data_ausentes.rename(columns=({'email':'Work email', 'Issue Type': 'Exception'}), inplace=True)
+
+
+merged_data = merged_data[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
+       'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
+       'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+
+Attendance_report  = pd.concat([merged_data ,merged_data_ausentes], ignore_index=True)
+
+
+merged_data = merged_data[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
+       'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
+       'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+
+Attendance_report  = pd.concat([merged_data ,merged_data_ausentes], ignore_index=True)
+
+merged_data = merged_data[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
+       'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
+       'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+
+Attendance_report  = pd.concat([merged_data ,merged_data_ausentes], ignore_index=True)
+
+
+def timedelta_to_ampm(td):
+
+    if pd.isna(td):  # si es NaN, retorna vacío
+        return ''
+    total_seconds = int(td.total_seconds())
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+
+    period = "AM" if hours < 12 else "PM"
+    hours_12 = hours % 12
+    if hours_12 == 0:
+        hours_12 = 12
+
+    return f"{hours_12}:{minutes:02d}:{seconds:02d} {period}"
+
+
+
+columnas = ['Schedule In', 'Schedule Out', 'Clock In', 'Clock Out']
+
+for col in columnas:
+    Attendance_report[col] = pd.to_timedelta(
+        Attendance_report[col].astype(str)
+    ).apply(timedelta_to_ampm)
+
+# Attendance_report['Schedule In'] = pd.to_timedelta(Attendance_report['Schedule In']).apply(timedelta_to_ampm)
+# Attendance_report['Schedule Out'] = pd.to_timedelta(Attendance_report['Schedule Out']).apply(timedelta_to_ampm)
+# Attendance_report['Clock In'] = pd.to_timedelta(Attendance_report['Clock In']).apply(timedelta_to_ampm)
+# Attendance_report['Clock Out'] = pd.to_timedelta(Attendance_report['Clock Out']).apply(timedelta_to_ampm)
+
+
+
+Attendance_report['Date'] = pd.to_datetime(Attendance_report['Date']).dt.strftime('%m/%d/%Y')
+
+
+
+Attendance_report = Attendance_report[['Work email', 'Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
+       'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
+       'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+
+
+Attendance_report = Attendance_report[['Date', 'Full Name', 'LOB', 'Status', 'Schedule In',
+       'Schedule Out', 'Schedule Hours', 'Clock In', 'Away', 'Lunch',
+       'Clock Out', 'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+
+no_show = roster[
+
+    (~roster['Email'].str.strip().str.lower().isin(source['Work email'])) &
+                      (~roster['Email'].isin(Excepciones.loc[(Excepciones['Attendance Start Date'].dt.normalize()<= fecha_en_cuestion) & 
+                    (Excepciones['Attendance End Date'].dt.normalize() >=fecha_en_cuestion),                         
+                          'email'].str.strip().str.lower()))
+
+
+                      ]
+
+no_show['Status'] = 'No Show'
+no_show['Clock In'] = ''
+no_show['Away'] = ''
+no_show['Lunch'] = ''
+no_show['Clock Out'] = ''
+no_show['Date'] = fecha_en_cuestion
+no_show['Date'] = no_show['Date'].dt.strftime('%m/%d/%Y')
+no_show['Worked Hours'] =  ''
+no_show['Holiday'] = ''
+no_show['Schedule Hours'] = ''
+no_show['Active'] = 'Active'
+no_show['Exception'] = ''
+
+no_show = no_show[['Date', 'Full Name', 'LOB', 'Status', 'Schedule In', 'Schedule Out',
+       'Schedule Hours', 'Clock In', 'Away', 'Lunch', 'Clock Out',
+       'Worked Hours', 'Holiday', 'Active', 'Exception']]
+
+columnas = ['Schedule In', 'Schedule Out']
+
+for col in columnas:
+    no_show[col] = pd.to_timedelta(
+        no_show[col].astype(str)
+    ).apply(timedelta_to_ampm)
+
+Attendance_report = pd.concat([Attendance_report, no_show], ignore_index=True)
+
+
+if dia_en_cuestion == 'Sábado' and Attendance_report['Full Name'].duplicated().any() == False:
+    Attendance_report = Attendance_report[Attendance_report['Status'].isin(['Late', 'On Time'])]
+    Attendance_report = Attendance_report.sort_values(by='LOB')
+    Attendance_report.to_excel(r'final_results\Attendance_Report.xlsx', index= False)
+
+
+else:
+    Attendance_report = Attendance_report.sort_values(by='LOB')
+    Attendance_report.to_excel(r'final_results\Attendance_Report.xlsx', index= False)
+
+
