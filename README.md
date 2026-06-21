@@ -1,45 +1,72 @@
-Aquí tienes un **README completo y profesional** para tu script:
+Aquí tienes un **README.md profesional y claro** para tu script:
 
 ***
 
-# 📊 Attendance & Exceptions Processing Pipeline
+# 📊 Attendance & Exceptions Processor
 
-Este proyecto automatiza la extracción, transformación y generación de reportes de **asistencia** y **excepciones (vacaciones/licencias)** desde Odoo, generando archivos Excel listos para análisis operativo.
-
-***
-
-## 🚀 Funcionalidades principales
-
-✅ Conexión automática a Odoo vía XML-RPC  
-✅ Extracción de:
-
-* Empleados
-* Asistencia diaria (`hr.attendance`)
-* Vacaciones/licencias (`hr.leave`)
-
-✅ Limpieza y transformación de datos  
-✅ Normalización de zonas horarias (UTC → America/Santo\_Domingo)  
-✅ Aplicación de reglas de negocio (status, excepciones, horarios)  
-✅ Generación de reportes finales en Excel:
-
-* `Vacaciones (hr.leave).xlsx`
-* `Asistencia (hr.attendance).xlsx`
-* `Excepciones.xlsx`
-* `Attendance_Report.xlsx`
-* `Shift_Start.xlsx` (casos especiales)
+Este proyecto extrae, procesa y genera reportes de asistencia y excepciones (vacaciones, permisos, licencias, etc.) desde **Odoo (HR module)** utilizando XML-RPC y `pandas`.
 
 ***
 
-## 📁 Estructura de carpetas
+## 🚀 Descripción
+
+El script realiza las siguientes funciones:
+
+1. 🔐 **Autenticación en Odoo**
+2. 👥 **Extracción de empleados**
+3. 🏖️ **Extracción y limpieza de vacaciones (excepciones)**
+4. ⏱️ **Extracción de asistencia diaria**
+5. 🔄 **Transformación y limpieza de datos**
+6. 📅 **Aplicación de reglas de negocio (late, on time, exceptions)**
+7. 📁 **Generación de reportes finales en Excel**
+
+***
+
+## ⚙️ Requisitos
+
+Instala las dependencias antes de ejecutar:
+
+```bash
+pip install pandas numpy
+```
+
+***
+
+## 🔐 Configuración
+
+Edita las variables de conexión a Odoo:
+
+```python
+url = "https://cabicash.odoo.com"
+db = "your_database"
+username = "your_email"
+api_key = "your_api_key"
+```
+
+***
+
+## 📅 Parámetros principales
+
+```python
+is_holiday = 'Yes'  # 'Yes' o 'No'
+ingresar_fecha = '2026-06-04'
+```
+
+* `is_holiday`: Define si el día es feriado
+* `ingresar_fecha`: Fecha a procesar
+
+***
+
+## 📥 Fuentes de datos externas
+
+El script requiere los siguientes archivos Excel:
 
 ```
-project/
-│
-├── exception_raw/
-├── exception_clean/
-├── attendance_raw/
-├── final_results/
-├── Schedule_change/
+Schedule_change/
+├── Roster.xlsx
+├── Roster_Sabado.xlsx
+
+Schedule_Exception/
 ├── Schedule_Exception(fecha_explicita).xlsx
 ├── Schedule_Exception(Rango_fecha).xlsx
 ├── Schedule_Exceptions(dias_en_la_semana).xlsx
@@ -47,36 +74,7 @@ project/
 
 ***
 
-## ⚙️ Configuración
-
-### Variables principales
-
-```python
-ingresar_fecha = 'YYYY-MM-DD'
-```
-
-Ejemplo:
-
-```python
-ingresar_fecha = '2026-06-18'
-```
-
-***
-
-### Credenciales Odoo
-
-```python
-url      = "https://cabicash.odoo.com"
-db       = "..."
-username = "..."
-api_key  = "..."
-```
-
-⚠️ **IMPORTANTE**: Mantén estas credenciales seguras. No subir a repositorios públicos.
-
-***
-
-## 🔄 Flujo del proceso
+## 📊 Flujo del Proceso
 
 ### 1. Extracción de datos
 
@@ -86,195 +84,122 @@ api_key  = "..."
 
 ***
 
-### 2. Transformación de Vacaciones
+### 2. Procesamiento de Vacaciones
 
-* Conversión a DataFrame
-* Mapeo de estados:
-  * `validate` → Aprobado
-  * `refuse` → Rechazado
-* Conversión de fechas a zona horaria local
-* Unión con empleados para obtener email
-* Limpieza y estandarización
+* Traducción de estados
+* Conversión de zona horaria
+* Normalización de tipo de excepción
 
-Resultado:
+Ejemplos:
 
-```
-exception_raw/Vacaciones (hr.leave).xlsx
-```
+* `Vacations → Vacation`
+* `Licencia médica → Medical License`
 
 ***
 
-### 3. Creación de Excepciones
+### 3. Procesamiento de Asistencia
 
-* Filtrado solo "Aprobado"
-* Estandarización de tipos de permisos:
-
-Ejemplo:
-
-* Vacations → Vacation
-
-* Licencia médica → Medical License
-
-* Tardanza → Late In
-
-* Asignación de "Vacation Year Period"
-
-Resultado:
-
-```
-exception_clean/Excepciones.xlsx
-```
+* Conversión de UTC → America/Santo\_Domingo
+* Merge con roster
+* Manejo de duplicados
+* Cálculo de:
+  * Horas trabajadas
+  * Lunch
+  * Away
 
 ***
 
-### 4. Procesamiento de Asistencia
+### 4. Reglas de negocio
 
-* Normalización de:
-  * Clock In / Clock Out
-  * Away / Lunch / Meeting
-* Unión con roster (horarios)
-* Manejo de registros duplicados
-* Aplicación de horarios especiales:
-  * Por fecha
-  * Por día de semana
+Se calcula el estado del empleado:
 
-***
-
-### 5. Cálculo de métricas
-
-Se generan campos como:
-
-* ✅ Status:
-  * On Time
-  * Late
-  * Exception (ej: Late In, Medical, etc.)
-
-* ✅ Worked Hours
-
-* ✅ Schedule Hours
-
-* ✅ Holiday flag
+| Condición                     | Resultado |
+| ----------------------------- | --------- |
+| Llegó tarde sin justificación | Late      |
+| Tiene excepción válida        | Exception |
+| Llegó a tiempo                | On Time   |
 
 ***
 
-### 6. Aplicación de excepciones
+### 5. Manejo de casos especiales
 
-Se cruzan datos con:
+✅ **Shift Start Mode**
 
-* `Excepciones.xlsx`
+* Activado cuando faltan muchos `Clock Out`
+* Genera reporte alternativo
 
-Lógica:
+✅ **No Show / Holiday**
 
-* Si el empleado tiene una excepción en esa fecha → se aplica
-* Si no tiene asistencia ni excepción → "No Show"
-
-***
-
-### 7. Casos especiales
-
-#### 🔴 Shift Start Mode
-
-Si hay muchos `Clock Out` vacíos (>=50):
-
-→ Se genera:
-
-```
-final_results/Shift_Start.xlsx
-```
+* Si `is_holiday = Yes` → `Holiday at Home`
+* Si no → `No Show`
 
 ***
 
-### 8. Reporte final
+## 📤 Outputs
 
-Archivo generado:
+El script genera:
 
-```
-final_results/Attendance_Report.xlsx
-```
-
-Incluye:
-
-* Asistencia
-* Excepciones
-* No show
-* Horarios
-* Métricas calculadas
-
-***
-
-## 🧠 Reglas de negocio importantes
-
-### Status
-
-| Condición                                | Resultado |
-| ---------------------------------------- | --------- |
-| Tarde + exception (Late In / Called Out) | Exception |
-| A tiempo + exception                     | Exception |
-| Tarde sin excepción                      | Late      |
-| Caso contrario                           | On Time   |
-
-***
-
-### No Show
-
-Empleado:
-
-* Está en roster
-* No tiene asistencia
-* No tiene excepción
-
-→ Status = `No Show`
-
-***
-
-## 🕒 Manejo de tiempo
-
-* Todas las fechas se convierten de UTC a:
-
-```
-America/Santo_Domingo (UTC-4)
-```
-
-***
-
-## 📦 Dependencias
+### 📁 Shift Start
 
 ```bash
-pip install pandas numpy openpyxl
+Attendance/final_results/Shift_Start.xlsx
+```
+
+### 📁 Attendance Report
+
+```bash
+final_results/Attendance/Attendance_Report.xlsx
 ```
 
 ***
 
-## ⚠️ Consideraciones
+## 🧠 Lógica clave
 
-* Verificar rutas de archivos (Windows paths)
-* Validar formato de Excel de entrada
-* Asegurar consistencia en emails (lowercase / trim)
-* Evitar duplicados en roster
-* Revisar excepciones de calendario
+### ⏰ Evaluación de tardanza
 
-***
-
-## ✅ Recomendaciones
-
-* Automatizar con scheduler (Airflow / Task Scheduler)
-* Usar variables de entorno para credenciales
-* Agregar logs en producción
-* Validar datos antes de exportar
+```python
+Clock In > Schedule In + 6 min → Late
+Clock In ≤ Schedule In + 5 min → On Time
+```
 
 ***
 
-## 📌 Resultado final
+### 📌 Matching de excepciones
 
-Este pipeline permite:
+Se cruza por:
 
-✔ Control de asistencia diario  
-✔ Identificación automática de:
+* Email
+* Rango de fechas
 
-* Tardanzas
-* Ausencias
-* Excepciones
+***
 
-✔ Generación de reportes listos para operaciones y RRHH
+## ⚠️ Notas importantes
 
+* El script asume zona horaria: `America/Santo_Domingo`
+* Maneja valores nulos en `Clock Out`
+* Normaliza formatos de tiempo (AM/PM)
+* Puede ejecutarse como `.py` o `.exe`
+
+***
+
+## ✅ Ejecución
+
+```bash
+python attendance_script.py
+```
+
+***
+
+## 📈 Mejoras futuras
+
+* Agregar logging
+* Parametrizar rutas
+* Soporte para múltiples fechas
+* Validación de archivos externos
+
+***
+
+## 👨‍💻 Autor
+
+Desarrollado para automatización de reportes de asistencia y excepciones en Odoo.
 
