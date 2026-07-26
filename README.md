@@ -1,5 +1,3 @@
-Aquí tienes un **README.md profesional y claro** para tu script:
-
 ***
 
 # 📊 Attendance & Exceptions Processor
